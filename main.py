@@ -233,9 +233,9 @@ async def send_role_panel(ctx):
 
 
 # --- 起動処理（429エラー回避リトライシステム付き） ---
-# ここでWebサーバーを起動
 start_web_server()
 
+# 環境変数を取得
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 
 async def start_bot_with_retry(token: str):
@@ -246,15 +246,24 @@ async def start_bot_with_retry(token: str):
 
     while True:
         try:
+            # printに flush=True をつけることで、Renderのログ画面にリアルタイムで文字を出します
             print(f"[{attempt}回目の挑戦] Discordに接続を試みます...", flush=True)
             await bot.start(token)
             break
         except discord.errors.HTTPException as e:
             if e.status == 429:
                 delay = min(base_delay * attempt, max_delay)
-                print(f"⚠️ Discordから一時規制(429)を受けました。")
-                print(f"👉 解除を待つため、{delay}秒後に自動で再接続します。", flush=True)
-                await asyncio.sleep(delay)
+                print(f"⚠️ Discordから一時規制(429)を受けました。", flush=True)
+                print(f"👉 解除を待つため、{delay}秒間待機します...", flush=True)
+                
+                # 固まっているように見えないよう、10秒ごとにカウントダウンを表示します
+                remaining = delay
+                while remaining > 0:
+                    await asyncio.sleep(10)
+                    remaining -= 10
+                    if remaining > 0:
+                        print(f"⏳ 再接続まであと {remaining} 秒...", flush=True)
+                
                 attempt += 1
             else:
                 print(f"HTTPエラーが発生しました: {e}", flush=True)
@@ -265,10 +274,9 @@ async def start_bot_with_retry(token: str):
 
 if TOKEN:
     try:
-        # メインスレッドで確実に非同期ループを実行
-        print("Botの非同期処理を開始します...", flush=True)
+        print("Botの非同期システムを起動します...", flush=True)
         asyncio.run(start_bot_with_retry(TOKEN))
     except KeyboardInterrupt:
-        print("Botの起動を手動で停止しました。")
+        print("Botの起動を手動で停止しました。", flush=True)
 else:
-    print("環境変数 'DISCORD_BOT_TOKEN' が見つかりません。RenderのEnvironment設定を確認してください。", flush=True)
+    print("❌ エラー: 環境変数 'DISCORD_BOT_TOKEN' が見つかりません。Renderの設定を確認してください。", flush=True)
