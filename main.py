@@ -46,7 +46,6 @@ class RoleButton(discord.ui.Button):
         self.role_id = role_id
 
     async def callback(self, interaction: discord.Interaction):
-        # サーバー（ギルド）オブジェクトとメンバーの取得
         guild = interaction.guild
         role = guild.get_role(self.role_id)
         
@@ -55,7 +54,6 @@ class RoleButton(discord.ui.Button):
             return
 
         member = interaction.user
-        # すでにロールを持っている場合は剥奪、持っていない場合は付与
         if role in member.roles:
             await member.remove_roles(role)
             await interaction.response.send_message(f"✅ ロール「{role.name}」を外しました。", ephemeral=True)
@@ -64,14 +62,12 @@ class RoleButton(discord.ui.Button):
             await interaction.response.send_message(f"✅ ロール「{role.name}」を付与しました！", ephemeral=True)
 
 
-# --- ロールパネル全体の「View」定義 ---
 class RolePanelView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=None)  # timeout=None にすることでBot再起動後もボタンが動くようにする
+        super().__init__(timeout=None)  # 再起動後もボタンが動くようにする
         
-        # TODO: あなたのサーバーの「ロールID」に書き換えてください（ボタンは複数追加可能）
-        # 例: RoleButton(ラベル名, ロールID, ボタンの色)
-        # 色の種類: discord.ButtonStyle.primary (青), success (緑), danger (赤), secondary (灰色)
+        # ※ あなたのサーバーの「ロールID」に書き換えてください（ボタンの色や名前も自由に変えられます）
+        # 例: RoleButton("ボタンに書く文字", ロールID, ボタンの色)
         self.add_item(RoleButton("マイクラ部 ⛏️", 123456789012345678, discord.ButtonStyle.primary))
         self.add_item(RoleButton("Overwatch 2 ⚔️", 876543210987654321, discord.ButtonStyle.success))
 
@@ -105,7 +101,6 @@ async def on_message_delete(message):
     if message.author.bot:
         return
     
-    # 「送信ログ」という名前のチャンネルを探す
     log_channel = discord.utils.get(message.guild.channels, name="送信ログ")
     if log_channel:
         embed = discord.Embed(title="🗑️ メッセージ削除ログ", color=0xffa500, timestamp=datetime.now(timezone.utc))
@@ -157,17 +152,14 @@ async def on_message(message):
     
     if len(user_message_history[user_id]) > SPAM_LIMIT:
         try:
-            # メッセージを削除
             await message.delete()
             
             # 10分間のタイムアウトを適用
             duration = timedelta(minutes=10)
             await message.author.timeout(duration, reason="スパム行為による自動システム制限")
             
-            # チャンネルに通知
-            await message.channel.send(f"🚨 {message.author.mention} をスパム行為のため **10分間タイムアウト（ミュート）** にしました。")
+            await message.channel.send(f"🚨 {message.author.mention} をスパム行為のため **10分間タイムアウト** にしました。")
             
-            # 「送信ログ」にも報告
             log_channel = discord.utils.get(message.guild.channels, name="送信ログ")
             if log_channel:
                 await log_channel.send(f"🚨 **スパム処置報告**: {message.author.mention} を10分間タイムアウトにしました。")
@@ -192,28 +184,24 @@ async def on_member_join(member):
     if not log_channel:
         return
 
-    # アカウント作成日からの経過日数
     now = datetime.now(timezone.utc)
     account_age = now - member.created_at
     
     is_suspicious = False
     warning_reasons = []
 
-    # 警告条件1: 作成から数日以内のアカウント (捨て垢の可能性)
     if account_age.days < SUSPICIOUS_ACCOUNT_DAYS:
         is_suspicious = True
         warning_reasons.append(f"⚠️ **新規作成アカウント** (作成から {account_age.days} 日目)")
         
-    # 警告条件2: デフォルトアバター (初期アイコンの荒らし対策)
     if member.avatar is None:
         is_suspicious = True
         warning_reasons.append("⚠️ **初期アバター (デフォルトアイコン)**")
 
-    # ログ送信用の埋め込みメッセージを作成
     embed = discord.Embed(
         title="📥 メンバーが参加しました", 
         description=f"{member.mention} ({member.name})",
-        color=0x00ff00 if not is_suspicious else 0xff0000, # 危険な場合は赤色
+        color=0x00ff00 if not is_suspicious else 0xff0000,
         timestamp=now
     )
     embed.add_field(name="アカウント作成日時", value=member.created_at.strftime('%Y-%m-%d %H:%M:%S'), inline=False)
@@ -221,7 +209,6 @@ async def on_member_join(member):
     if is_suspicious:
         embed.title = "⚠️ 不審なメンバーの参加を検知 ⚠️"
         embed.add_field(name="警告理由", value="\n".join(warning_reasons), inline=False)
-        # メンションをつけて管理者に通知を飛ばす
         await log_channel.send(content="⚠️ **管理者への警告アラート**", embed=embed)
     else:
         await log_channel.send(embed=embed)
@@ -229,7 +216,7 @@ async def on_member_join(member):
 
 # --- コマンド：ロールパネル設置 (!rolepanel) ---
 @bot.command(name="rolepanel")
-@commands.has_permissions(administrator=True) # 管理者のみ実行可能
+@commands.has_permissions(administrator=True)
 async def send_role_panel(ctx):
     """ボタン式のロール付与パネルを設置します"""
     embed = discord.Embed(
@@ -237,15 +224,43 @@ async def send_role_panel(ctx):
         description="下のボタンを押すことで、対応するロールを自分でつけたり外したりできます！\n興味のあるものを選択してください。",
         color=0x9b59b6
     )
-    # パネルを送信。この時、定義したView（ボタン）を一緒に渡す
     await ctx.send(embed=embed, view=RolePanelView())
 
 
-# --- 起動処理 ---
+# --- 5. 起動処理（429エラー回避リトライシステム付き） ---
 start_web_server()
 
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+
+async def start_bot_with_retry(token: str):
+    """Discordの429規制を受けたら自動で待機してリトライする関数"""
+    base_delay = 60  # 初回待機：60秒
+    max_delay = 300  # 最大待機：5分
+    attempt = 1
+
+    while True:
+        try:
+            print(f"[{attempt}回目の挑戦] Discordに接続しています...")
+            await bot.start(token)
+            break
+        except discord.errors.HTTPException as e:
+            if e.status == 429:
+                delay = min(base_delay * attempt, max_delay)
+                print(f"⚠️ Discordから一時規制(429)を受けました。")
+                print(f"👉 解除を待つため、{delay}秒後に自動で再接続します。")
+                await asyncio.sleep(delay)
+                attempt += 1
+            else:
+                print(f"HTTPエラーが発生しました: {e}")
+                raise e
+        except Exception as e:
+            print(f"予期しないエラーが発生しました: {e}")
+            raise e
+
 if TOKEN:
-    bot.run(TOKEN)
+    try:
+        asyncio.run(start_bot_with_retry(TOKEN))
+    except KeyboardInterrupt:
+        print("Botの起動を手動で停止しました。")
 else:
     print("環境変数 'DISCORD_BOT_TOKEN' が見つかりません。")
