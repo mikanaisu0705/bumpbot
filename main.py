@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands, tasks
+from discord import app_commands
 import asyncio
 import os
 import random
@@ -15,24 +16,32 @@ def home():
     return "Bot is alive!"
 
 def run_flask():
-    # Flaskのバナー非表示＆スレッド起動で完全にバックグラウンド化
     import logging
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.ERROR)
     app.run(host='0.0.0.0', port=8080, debug=False, use_reloader=False)
 
 def start_web_server():
-    # daemon=True にすることで、メインスレッド（Bot）の邪魔をさせません
     t = Thread(target=run_flask, daemon=True)
     t.start()
 
 
 # --- Discord Bot 設定 ---
 intents = discord.Intents.default()
-intents.message_content = True
+intents.message_content = True  # メッセージ埋め込み（Embed）を監視するために必須です
 intents.members = True
+intents.presences = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+class MyBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=intents)
+
+    async def setup_hook(self):
+        # スラッシュコマンド（アプリケーションコマンド）をDiscordに登録・同期します
+        await self.tree.sync()
+        print("スラッシュコマンドの同期が完了しました。")
+
+bot = MyBot()
 
 
 # --- セキュリティ設定・データベース ---
@@ -42,6 +51,9 @@ SPAM_LIMIT = 5          # 制限メッセージ数
 SPAM_INTERVAL = 5.0     # 制限秒数
 BANNED_WORDS = ["荒らし", "あらし", "スパム", "spam"]
 SUSPICIOUS_ACCOUNT_DAYS = 7  # 作成から何日以内を「危険・不審」とみなすか
+
+# タイマーが現在稼働中か管理するフラグ（重複動作を防ぐため）
+is_timer_running = False
 
 
 # --- 1. ロールパネル用：ボタンの定義 ---
@@ -83,20 +95,29 @@ async def on_ready():
     print(f"ログインしました: {bot.user.name}")
     # 再起動後もロールパネルのボタンが動くように登録する
     bot.add_view(RolePanelView())
-    change_status.start()
+    
+    # ループタスクがすでに動いているか確認して起動
+    if not change_status.is_running():
+        change_status.start()
 
 
 # --- タスク: 10秒ごとにステータスを切り替える ---
 @tasks.loop(seconds=10)
 async def change_status():
+    global is_timer_running
     total_members = sum(guild.member_count for guild in bot.guilds)
-    statuses = [
-        discord.Game(name="スパム監視中 🛡️"),
-        discord.Game(name=f"{total_members}人のメンバーを見守り中 👥"),
-        discord.Game(name="!help でコマンドを確認 💬"),
-        discord.Streaming(name="2時間リマインダー稼働中 ⏰", url="https://www.twitch.tv/discord")
-    ]
-    status = random.choice(statuses)
+    
+    # 2時間タイマー稼働中はステータスを固定し、そうでないときはランダム切り替えにする
+    if is_timer_running:
+        status = discord.Game(name="BUMPの2時間タイマー稼働中 ⏰")
+    else:
+        statuses = [
+            discord.Game(name="スパム監視中 🛡️"),
+            discord.Game(name=f"{total_members}人のメンバーを見守り中 👥"),
+            discord.Game(name="/help でコマンドを確認 💬"),  # ヘルプも「/」へ
+        ]
+        status = random.choice(statuses)
+        
     await bot.change_presence(activity=status)
 
 
@@ -131,9 +152,56 @@ async def on_message_edit(before, after):
         await log_channel.send(embed=embed)
 
 
-# --- イベント: メッセージ受信時 (スパム監視 & Bumpリマインダー) ---
+# --- 2時間リマインダーの非同期タイマー処理 ---
+async def start_bump_timer(channel, mention):
+    global is_timer_running
+    if is_timer_running:
+        return  # すでにタイマーが動いていたら重複起動しない
+    
+    is_timer_running = True
+    await channel.send(f"⏰ **BUMP成功を検知しました！**\n{mention} さん、2時間後にお知らせします。")
+    
+    # 2時間（7200秒）待機
+    await asyncio.sleep(7200)
+    
+    await channel.send(f"🔔 {mention} **前回のBUMPから2時間が経過しました！**\n次の `/bump` が可能です！")
+    is_timer_running = False
+
+
+# --- イベント: メッセージ受信時 (スパム監視 & BUMP埋め込み検知) ---
 @bot.event
 async def on_message(message):
+    # DISBOARD（ID: 302050872383242240）の埋め込みメッセージを監視
+    if message.author.id == 302050872383242240 and message.embeds:
+        for embed in message.embeds:
+            # 埋め込みのタイトル、または説明文を抽出
+            embed_text = ""
+            if embed.title:
+                embed_text += embed.title
+            if embed.description:
+                embed_text += embed.description
+            
+            # DISBOARDの成功メッセージ「表示順位をアップしたよ」が含まれているか判定
+            if "表示順位をアップしたよ" in embed_text:
+                # 埋め込み内の「BUMPした人」のメンションがあれば取得、なければBUMPチャンネル宛て
+                # DISBOARDは通常、埋め込み内にコマンド実行者のメンション（例: <@ID>）を含めます
+                user_mention = "@here"
+                for field in embed.fields:
+                    if "<@" in field.value:
+                        user_mention = field.value
+                        break
+                if "<@" in embed.description:
+                    # 説明文にメンションが含まれている場合の予備抽出
+                    import re
+                    match = re.search(r"<@!?\d+>", embed.description)
+                    if match:
+                        user_mention = match.group(0)
+
+                # 非同期タスクとして2時間タイマーを起動
+                asyncio.create_task(start_bump_timer(message.channel, user_mention))
+                break
+
+    # BOT自身のメッセージはここで除外（DISBOARDはBOTなので、上の処理の後に除外します）
     if message.author.bot:
         return
 
@@ -171,13 +239,6 @@ async def on_message(message):
             return
         except discord.Forbidden:
             print("タイムアウトまたは削除の権限（メンバーの管理/メッセージの管理）がありません。")
-
-    # --- Bump / Up 2時間リマインダー ---
-    content = message.content.lower()
-    if content.startswith("!bump") or content.startswith("/bump") or content.startswith("/up") or content == "bump" or content == "up":
-        await message.channel.send(f"⏰ **Bump/Upを検知しました！**\n{message.author.mention} さん、2時間後にお知らせします。")
-        await asyncio.sleep(7200)
-        await message.channel.send(f"🔔 {message.author.mention} **前回の操作から2時間が経過しました！**\n次の `/bump` または `/up` が可能です！")
 
     await bot.process_commands(message)
 
@@ -219,17 +280,17 @@ async def on_member_join(member):
         await log_channel.send(embed=embed)
 
 
-# --- コマンド：ロールパネル設置 (!rolepanel) ---
-@bot.command(name="rolepanel")
-@commands.has_permissions(administrator=True)
-async def send_role_panel(ctx):
-    """ボタン式のロール付与パネルを設置します"""
+# --- スラッシュコマンド：ロールパネル設置 (/rolepanel) ---
+@bot.tree.command(name="rolepanel", description="ボタン式のロール付与パネルを設置します")
+@app_commands.checks.has_permissions(administrator=True)
+async def send_role_panel(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🎭 ロール（役職）付与パネル",
         description="下のボタンを押すことで、対応するロールを自分でつけたり外したりできます！\n興味のあるものを選択してください。",
         color=0x9b59b6
     )
-    await ctx.send(embed=embed, view=RolePanelView())
+    # スラッシュコマンドは「interaction.response.send_message」で返信します
+    await interaction.response.send_message(embed=embed, view=RolePanelView())
 
 
 # --- 起動処理（429エラー回避リトライシステム付き） ---
@@ -246,7 +307,6 @@ async def start_bot_with_retry(token: str):
 
     while True:
         try:
-            # printに flush=True をつけることで、Renderのログ画面にリアルタイムで文字を出します
             print(f"[{attempt}回目の挑戦] Discordに接続を試みます...", flush=True)
             await bot.start(token)
             break
@@ -256,7 +316,6 @@ async def start_bot_with_retry(token: str):
                 print(f"⚠️ Discordから一時規制(429)を受けました。", flush=True)
                 print(f"👉 解除を待つため、{delay}秒間待機します...", flush=True)
                 
-                # 固まっているように見えないよう、10秒ごとにカウントダウンを表示します
                 remaining = delay
                 while remaining > 0:
                     await asyncio.sleep(10)
