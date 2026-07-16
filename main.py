@@ -245,19 +245,7 @@ async def send_role_panel(ctx):
 start_web_server()
 
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-
-# 無料公開されているプロキシを設定します（例: http://ip:port の形式）
-# ※無料プロキシは不安定な場合があるため、動作しない場合はプロキシのアドレスを変更する必要があります
-PROXY_URL = "http://discord-proxy.com:80" 
-
 if TOKEN:
-    # bot.run() を呼ぶ前に、botオブジェクト内部の HTTP クライアントにプロキシを設定します
-    bot.http.proxy = PROXY_URL
-    
-    try:
-        print(f"プロキシ経由でログインを試みます... ({PROXY_URL})")
-        bot.run(TOKEN)
-    except Exception as e:
-        print(f"ログイン中にエラーが発生しました: {e}")
+    bot.run(TOKEN)
 else:
     print("環境変数 'DISCORD_BOT_TOKEN' が見つかりません。")
