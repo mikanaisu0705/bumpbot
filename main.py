@@ -245,7 +245,17 @@ async def send_role_panel(ctx):
 start_web_server()
 
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+
+# DiscordのIP制限を回避するための無料プロキシサーバーURLを指定します
+# （RenderのIPではなく、プロキシ経由でDiscordに接続します）
+PROXY_URL = "http://discord-proxy.com:80" 
+
 if TOKEN:
-    bot.run(TOKEN)
+    try:
+        # proxy パラメータを入れて起動させる
+        bot.run(TOKEN, proxy=PROXY_URL)
+    except Exception as e:
+        print(f"プロキシ経由での起動に失敗しました。通常の起動を試みます。エラー: {e}")
+        bot.run(TOKEN)
 else:
     print("環境変数 'DISCORD_BOT_TOKEN' が見つかりません。")
